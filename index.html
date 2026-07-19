@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TAK Restreamer QR Codes</title>
+<meta name="description" content="Generate QR codes for RTMP/RTSP/SRT video stream connections served by the TAK video restreamer." />
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+<div class="page">
+
+  <header class="page-header">
+    <h1>TAK Restreamer QR Codes</h1>
+    <p class="subtitle">Build a video stream URL and generate a scannable QR code for it.</p>
+  </header>
+
+  <main class="layout">
+
+    <section class="panel form-panel" aria-labelledby="form-heading">
+      <h2 id="form-heading">Stream Connection</h2>
+
+      <form id="stream-form" autocomplete="off">
+
+        <fieldset class="protocol-group">
+          <legend>Protocol</legend>
+          <div class="protocol-options" role="radiogroup" aria-label="Protocol">
+            <label class="protocol-option">
+              <input type="radio" name="protocol" value="rtsp" checked />
+              <span>RTSP</span>
+            </label>
+            <label class="protocol-option">
+              <input type="radio" name="protocol" value="rtmp" />
+              <span>RTMP</span>
+            </label>
+            <label class="protocol-option">
+              <input type="radio" name="protocol" value="srt" />
+              <span>SRT</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <div class="field">
+          <label for="address">Server Address</label>
+          <input type="text" id="address" name="address" placeholder="stream.prod.ilwg.us" required />
+        </div>
+
+        <div class="field">
+          <label for="port">Port</label>
+          <input type="number" id="port" name="port" min="1" max="65535" inputmode="numeric" required />
+          <p class="hint" id="port-hint"></p>
+        </div>
+
+        <div class="field">
+          <label for="path">Stream Name / Path</label>
+          <input type="text" id="path" name="path" placeholder="stream1" required />
+          <p class="hint">No leading slash needed — added automatically where relevant.</p>
+        </div>
+
+        <div class="field" id="srt-mode-field" hidden>
+          <label for="srt-mode">SRT Stream ID Mode</label>
+          <select id="srt-mode" name="srt-mode">
+            <option value="read" selected>read (viewer)</option>
+            <option value="publish">publish (encoder)</option>
+          </select>
+        </div>
+
+        <div class="field" id="passphrase-field" hidden>
+          <label for="passphrase">SRT Passphrase <span class="optional">(optional)</span></label>
+          <input type="text" id="passphrase" name="passphrase" placeholder="leave blank if none" />
+        </div>
+
+      </form>
+    </section>
+
+    <section class="panel output-panel" aria-labelledby="output-heading">
+      <h2 id="output-heading">Generated Stream</h2>
+
+      <div class="url-display">
+        <label for="stream-url">Stream URL</label>
+        <div class="url-row">
+          <input type="text" id="stream-url" readonly />
+          <button type="button" id="copy-btn">Copy</button>
+        </div>
+      </div>
+
+      <div class="qr-display">
+        <div id="qr-code" aria-live="polite"></div>
+        <button type="button" id="download-qr-btn" hidden>Download QR (PNG)</button>
+      </div>
+
+    </section>
+
+  </main>
+
+  <footer class="page-footer">
+    <p>Generates URLs matching the <a href="https://github.com/raytheonbbn/tak-video-restreamer" target="_blank" rel="noopener noreferrer">tak-video-restreamer</a> connection format. Runs entirely in your browser — nothing is sent to a server.</p>
+  </footer>
+
+</div>
+
+<script src="js/vendor/qrcode.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
