@@ -144,10 +144,75 @@ else
     echo "==> Restart of $CONSOLE_SERVICE requested (systemd-run unavailable, backgrounded instead)"
 fi
 
+# --- 6. Patch the LIVE Caddyfile and reload now --------------------------
+# generate_caddyfile() (patched in step 4) only takes effect on its next
+# regen. Rather than importing app.py to call it directly — which would also
+# fire its post-update auto-deploy machinery (Authentik compose healing, LDAP
+# outpost recreation, etc.) as an uncontrolled side effect — this mirrors
+# InfraTAK-Module-MigrateAuthentik/scripts/authentik-repoint-caddy.sh: edit
+# the live file textually, validate, reload, roll back on failure. The two
+# writers (generator patch + this direct edit) stay in sync because both
+# produce the identical block; the next real regen just overwrites this one
+# with the same content.
+CADDYFILE=/etc/caddy/Caddyfile
+if [ ! -f "$CADDYFILE" ]; then
+    echo "==> No $CADDYFILE yet — Caddy not deployed. Deploy Caddy from the"
+    echo "    console once, then re-run this script (or install.sh --sync) to"
+    echo "    add the /qr route."
+else
+    CADDY_MARKER='# TAK Restreamer QR Codes — public /qr route'
+    if grep -qF "$CADDY_MARKER" "$CADDYFILE"; then
+        echo "==> Live Caddyfile already has the /qr route — nothing to patch"
+    else
+        CADDY_BAK="$CADDYFILE.bak-$(date +%Y%m%d-%H%M%S)"
+        cp -a "$CADDYFILE" "$CADDY_BAK"
+        PATCH_OK=1
+        python3 - "$CADDYFILE" "$CADDY_MARKER" <<'PYEOF' || PATCH_OK=0
+import re, sys
+
+path, marker = sys.argv[1], sys.argv[2]
+with open(path, 'r', encoding='utf-8') as f:
+    src = f.read()
+
+# Anchor on MediaMTX's site header: "# MediaMTX Web Console\n<host> {\n"
+# (host is whatever generate_caddyfile() rendered — don't need to know it).
+m = re.search(r'# MediaMTX Web Console\n[^\n]+\{\n', src)
+if not m:
+    print("ERROR: could not find MediaMTX site block in live Caddyfile — is MediaMTX deployed?", file=sys.stderr)
+    sys.exit(1)
+
+block = (
+    f'    {marker}\n'
+    '    route /qr /qr/* {\n'
+    '        reverse_proxy 127.0.0.1:5001\n'
+    '    }\n'
+)
+src = src[:m.end()] + block + src[m.end():]
+
+with open(path, 'w', encoding='utf-8') as f:
+    f.write(src)
+print("    + inserted /qr route into live Caddyfile")
+PYEOF
+        if [ "$PATCH_OK" -ne 1 ]; then
+            echo "    ⚠ Could not patch live Caddyfile — left unchanged. Add the /qr" >&2
+            echo "      route manually or via the console's Caddy > Deploy button." >&2
+        elif command -v caddy >/dev/null 2>&1 && ! caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
+            echo "ERROR: caddy validate failed after patch — restoring previous Caddyfile" >&2
+            cp -a "$CADDY_BAK" "$CADDYFILE"
+        else
+            echo "    ✓ Caddyfile validates (backup: $CADDY_BAK)"
+            if systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null; then
+                echo "    ✓ Caddy reloaded"
+            else
+                echo "    ⚠ Could not reload Caddy via systemctl — reload it manually" >&2
+            fi
+        fi
+    fi
+fi
+
 echo ""
 echo "✓ TAK Restreamer QR Codes module installed."
-echo "  One more step: open the Caddy page in the console and click Deploy"
-echo "  (or save any setting that triggers a Caddy regen) to pick up the new"
-echo "  /qr route — install.sh patches generate_caddyfile() but does not"
-echo "  touch the live Caddyfile itself."
-echo "  Once deployed, the page is public at https://<mediamtx-domain>/qr"
+echo "  Page should now be public at https://<mediamtx-domain>/qr"
+echo "  (e.g. stream.prod.ilwg.us/qr). If Caddy wasn't deployed yet, or the"
+echo "  live-Caddyfile patch above reported a warning, open the Caddy page in"
+echo "  the console and click Deploy once to pick it up."
