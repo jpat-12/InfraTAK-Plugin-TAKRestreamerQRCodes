@@ -101,7 +101,46 @@ else
     echo "==> Restart of $CONSOLE_SERVICE requested (systemd-run unavailable, backgrounded instead)"
 fi
 
+# Remove the /qr block from the LIVE Caddyfile too (mirrors install.sh's
+# direct edit — see its step 6 comment for why this doesn't reimport app.py).
+CADDYFILE=/etc/caddy/Caddyfile
+CADDY_MARKER='# TAK Restreamer QR Codes — public /qr route'
+if [ -f "$CADDYFILE" ] && grep -qF "$CADDY_MARKER" "$CADDYFILE"; then
+    CADDY_BAK="$CADDYFILE.bak-$(date +%Y%m%d-%H%M%S)"
+    cp -a "$CADDYFILE" "$CADDY_BAK"
+    python3 - "$CADDYFILE" "$CADDY_MARKER" <<'PYEOF'
+import sys
+
+path, marker = sys.argv[1], sys.argv[2]
+with open(path, 'r', encoding='utf-8') as f:
+    src = f.read()
+
+block = (
+    f'    {marker}\n'
+    '    route /qr /qr/* {\n'
+    '        reverse_proxy 127.0.0.1:5001\n'
+    '    }\n'
+)
+if block in src:
+    src = src.replace(block, '', 1)
+    print("    - removed /qr route from live Caddyfile")
+with open(path, 'w', encoding='utf-8') as f:
+    f.write(src)
+PYEOF
+    if command -v caddy >/dev/null 2>&1 && ! caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
+        echo "ERROR: caddy validate failed after removal — restoring previous Caddyfile" >&2
+        cp -a "$CADDY_BAK" "$CADDYFILE"
+    else
+        echo "    ✓ Caddyfile validates (backup: $CADDY_BAK)"
+        if systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null; then
+            echo "    ✓ Caddy reloaded"
+        else
+            echo "    ⚠ Could not reload Caddy via systemctl — reload it manually" >&2
+        fi
+    fi
+else
+    echo "==> Live Caddyfile has no /qr route to remove"
+fi
+
 echo ""
-echo "✓ TAK Restreamer QR Codes module uninstalled. Click Deploy on the Caddy"
-echo "  page (or save any setting that triggers a regen) so the /qr route"
-echo "  actually drops out of the live Caddyfile."
+echo "✓ TAK Restreamer QR Codes module uninstalled."
