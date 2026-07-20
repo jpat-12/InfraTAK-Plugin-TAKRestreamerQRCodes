@@ -62,14 +62,36 @@ else:
     print("    = module registration not present, nothing to remove")
 
 CADDY_MARKER = '# TAK Restreamer QR Codes — public /qr route'
-caddy_block = (
-    '        lines.append(f"    ' + CADDY_MARKER + '")\n'
-    '        lines.append(f"    route /qr /qr/* {{")\n'
-    '        lines.append(f"        reverse_proxy 127.0.0.1:5001")\n'
-    '        lines.append(f"    }}")\n'
-)
-if caddy_block in src:
-    src = src.replace(caddy_block, '', 1)
+CANDIDATE_GEN_BLOCKS = [
+    # current (TLS transport, handle)
+    (
+        '        lines.append(f"    ' + CADDY_MARKER + '")\n'
+        '        lines.append(f"    handle /qr* {{")\n'
+        '        lines.append(f"        reverse_proxy 127.0.0.1:5001 {{")\n'
+        '        lines.append(f"            transport http {{")\n'
+        '        lines.append(f"                tls")\n'
+        '        lines.append(f"                tls_insecure_skip_verify")\n'
+        '        lines.append(f"                read_timeout 1h")\n'
+        '        lines.append(f"                write_timeout 1h")\n'
+        '        lines.append(f"            }}")\n'
+        '        lines.append(f"        }}")\n'
+        '        lines.append(f"    }}")\n'
+    ),
+    # earlier (bare reverse_proxy, route directive — pre-TLS-fix)
+    (
+        '        lines.append(f"    ' + CADDY_MARKER + '")\n'
+        '        lines.append(f"    route /qr /qr/* {{")\n'
+        '        lines.append(f"        reverse_proxy 127.0.0.1:5001")\n'
+        '        lines.append(f"    }}")\n'
+    ),
+]
+removed = False
+for caddy_block in CANDIDATE_GEN_BLOCKS:
+    if caddy_block in src:
+        src = src.replace(caddy_block, '', 1)
+        removed = True
+        break
+if removed:
     print("    - removed /qr route from generate_caddyfile()'s MediaMTX block")
 else:
     print("    = /qr Caddy route not present, nothing to remove")
@@ -115,10 +137,25 @@ path, marker = sys.argv[1], sys.argv[2]
 with open(path, 'r', encoding='utf-8') as f:
     src = f.read()
 
-# Try both shapes install.sh has ever written (route form was the original
-# attempt before it turned out the live block needed a "handle" directive to
-# match its sibling /login*, /static*, etc. blocks — see install.sh history).
+# Try every shape install.sh has ever written: current (TLS transport,
+# handle), pre-TLS-fix (bare reverse_proxy, handle), and the original
+# attempt (bare reverse_proxy, route) before it turned out the live block
+# needed a "handle" directive to match its sibling /login*, /static*, etc.
+# blocks — see install.sh history.
 CANDIDATE_BLOCKS = [
+    (
+        f'    {marker}\n'
+        '    handle /qr* {\n'
+        '        reverse_proxy 127.0.0.1:5001 {\n'
+        '            transport http {\n'
+        '                tls\n'
+        '                tls_insecure_skip_verify\n'
+        '                read_timeout 1h\n'
+        '                write_timeout 1h\n'
+        '            }\n'
+        '        }\n'
+        '    }\n'
+    ),
     (
         f'    {marker}\n'
         '    handle /qr* {\n'
