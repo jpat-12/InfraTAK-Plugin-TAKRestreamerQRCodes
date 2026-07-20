@@ -115,14 +115,29 @@ path, marker = sys.argv[1], sys.argv[2]
 with open(path, 'r', encoding='utf-8') as f:
     src = f.read()
 
-block = (
-    f'    {marker}\n'
-    '    route /qr /qr/* {\n'
-    '        reverse_proxy 127.0.0.1:5001\n'
-    '    }\n'
-)
-if block in src:
-    src = src.replace(block, '', 1)
+# Try both shapes install.sh has ever written (route form was the original
+# attempt before it turned out the live block needed a "handle" directive to
+# match its sibling /login*, /static*, etc. blocks — see install.sh history).
+CANDIDATE_BLOCKS = [
+    (
+        f'    {marker}\n'
+        '    handle /qr* {\n'
+        '        reverse_proxy 127.0.0.1:5001\n'
+        '    }\n'
+    ),
+    (
+        f'    {marker}\n'
+        '    route /qr /qr/* {\n'
+        '        reverse_proxy 127.0.0.1:5001\n'
+        '    }\n'
+    ),
+]
+removed = False
+for block in CANDIDATE_BLOCKS:
+    if block in src:
+        src = src.replace(block, '', 1)
+        removed = True
+if removed:
     print("    - removed /qr route from live Caddyfile")
 with open(path, 'w', encoding='utf-8') as f:
     f.write(src)
