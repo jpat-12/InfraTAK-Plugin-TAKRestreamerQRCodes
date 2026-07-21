@@ -1,8 +1,9 @@
 # InfraTAK-Plugin-TAKRestreamerQRCodes
 
-A one-page tool that turns a video stream's protocol/address/port/path into a scannable
-QR code — instead of hand-typing an RTSP/RTMP/SRT URL on a phone, point a camera at the
-QR code. Built to match the connection format served by
+A one-page tool that turns a video stream's protocol/address/port/path (plus an
+optional human-readable name) into a scannable QR code — instead of hand-typing an
+RTSP/RTMP/SRT URL on a phone, point a camera at the QR code. Built to match the
+connection format served by
 [raytheonbbn/tak-video-restreamer](https://github.com/raytheonbbn/tak-video-restreamer).
 
 Static HTML/CSS/JS, no build step, no network calls at runtime — everything (including
@@ -10,6 +11,21 @@ QR generation) happens in the browser. That makes it safe to host anywhere. As a
 infra-TAK module (see below) it gets its own public subdomain, e.g. `qr.prod.ilwg.us` —
 it isn't a plugin for the tak-video-restreamer itself and doesn't share its domain or
 Caddy site.
+
+## Quick start
+
+On an infra-TAK console host, as root:
+
+```bash
+git clone https://github.com/jpat-12/InfraTAK-Plugin-TAKRestreamerQRCodes.git
+cd InfraTAK-Plugin-TAKRestreamerQRCodes
+sudo bash install.sh
+```
+
+That's the whole install — it's live at `https://qr.<your-fqdn>` immediately, no
+"Deploy" click needed. See [Install as an infra-TAK module](#install-as-an-infra-tak-module)
+below for what it actually does, or [Run it standalone](#run-it-standalone) if you just
+want to open the page locally without infra-TAK at all.
 
 ## Run it standalone
 
