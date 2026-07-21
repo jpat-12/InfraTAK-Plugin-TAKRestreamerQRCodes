@@ -3,5 +3,9 @@
 Thumbs.db
 *.swp
 
+# Python build cruft (from py_compile-ing restreamer_qr.py during dev)
+__pycache__/
+*.pyc
+
 # Local scratch, never intended for commit
 *.local.*

@@ -15,6 +15,10 @@
 #
 # Safe to run even if the module was never installed (no-ops cleanly).
 #
+# This is the same script the console's /admin/qr settings page runs (via
+# subprocess, after re-checking the admin password) when you click its
+# Uninstall button — running it directly over SSH does the same thing.
+#
 # Usage:
 #   sudo bash uninstall.sh
 
@@ -49,23 +53,18 @@ path = sys.argv[1]
 with open(path, 'r', encoding='utf-8') as f:
     src = f.read()
 
-# 1. Route registration (either display-name wording)
-def _reg_block(display_name):
-    return (
-        "try:\n"
-        "    import restreamer_qr as _restreamer_qr_module\n"
-        "    _restreamer_qr_module.register_routes(app, login_required, load_settings, save_settings)\n"
-        "except Exception as _e:\n"
-        "    print(f'[restreamer_qr] Failed to register " + display_name + " module: {_e}', flush=True)\n\n"
-    )
-removed = False
-for name in ('TAK Video Stream QR Codes', 'TAK Restreamer QR Codes'):
-    block = _reg_block(name)
-    if block in src:
-        src = src.replace(block, '', 1)
-        removed = True
-        break
-if removed:
+# 1. Route registration — regex so it deletes regardless of which
+# display-name wording or register_routes() arg count (4-arg pre-uninstall-
+# button vs 6-arg with load_auth/check_password_hash) is currently deployed.
+REG_BLOCK_RE = re.compile(
+    r"try:\n"
+    r"    import restreamer_qr as _restreamer_qr_module\n"
+    r"    _restreamer_qr_module\.register_routes\([^\n]*\)\n"
+    r"except Exception as _e:\n"
+    r"    print\(f'\[restreamer_qr\] Failed to register [^\n]*', flush=True\)\n\n"
+)
+src, n = REG_BLOCK_RE.subn('', src, count=1)
+if n:
     print("    - removed module registration")
 else:
     print("    = module registration not present, nothing to remove")
@@ -77,24 +76,19 @@ if "\n    'qr': 'qr'," in src:
 else:
     print("    = SERVICE_DOMAIN_DEFAULTS has no 'qr' entry, nothing to remove")
 
-# 3. detect_modules() entry (either display-name wording)
-def _detect_block(display_name):
-    return (
-        "    # " + display_name + " — public, static QR generator page; always\n"
-        "    # available once installed since it's just files bundled into the console,\n"
-        "    # no separate process to health-check.\n"
-        "    qr_installed = os.path.exists(os.path.join(BASE_DIR, 'modules', 'restreamer_qr', 'index.html'))\n"
-        "    modules['restreamer_qr'] = {'name': '" + display_name + "', 'installed': qr_installed, 'running': qr_installed,\n"
-        "        'description': 'Public QR code generator for RTMP/RTSP/SRT stream URLs', 'icon': '\U0001F4F1', 'route': '/qr', 'priority': 13}\n"
-    )
-removed = False
-for name in ('TAK Video Stream QR Codes', 'TAK Restreamer QR Codes'):
-    block = _detect_block(name)
-    if block in src:
-        src = src.replace(block, '', 1)
-        removed = True
-        break
-if removed:
+# 3. detect_modules() entry — regex so it deletes regardless of which
+# display-name wording or 'route' value ('/qr' pre-admin-page vs
+# '/admin/qr') is currently deployed.
+DETECT_BLOCK_RE = re.compile(
+    r"    # [^\n]* — public, static QR generator page; always\n"
+    r"    # available once installed since it's just files bundled into the console,\n"
+    r"    # no separate process to health-check\.\n"
+    r"    qr_installed = os\.path\.exists\(os\.path\.join\(BASE_DIR, 'modules', 'restreamer_qr', 'index\.html'\)\)\n"
+    r"    modules\['restreamer_qr'\] = \{'name': '[^']*', 'installed': qr_installed, 'running': qr_installed,\n"
+    r"        'description': 'Public QR code generator for RTMP/RTSP/SRT stream URLs', 'icon': '[^']*', 'route': '[^']*', 'priority': 13\}\n"
+)
+src, n = DETECT_BLOCK_RE.subn('', src, count=1)
+if n:
     print("    - removed restreamer_qr entry from detect_modules()")
 else:
     print("    = detect_modules() has no restreamer_qr entry, nothing to remove")

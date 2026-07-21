@@ -58,10 +58,12 @@ onto another service's site. `install.sh`:
 2. Copies `restreamer_qr.py` and the static page into the console's
    `modules/restreamer_qr/` directory.
 3. Patches `app.py` (idempotent — safe to re-run) to:
-   - register the module's Flask routes (`/qr`, `/qr/`, `/qr/<file>`) at startup
+   - register the module's Flask routes: the public `/qr`, `/qr/`, `/qr/<file>`, plus an
+     authenticated `/admin/qr` settings page and `/api/restreamer_qr/uninstall`
    - add `'qr': 'qr'` to `SERVICE_DOMAIN_DEFAULTS` so it gets its own domain
    - add a `restreamer_qr` entry to `detect_modules()` (existence-based — it's static
-     files bundled into the console, nothing to health-check)
+     files bundled into the console, nothing to health-check) with `'route':
+     '/admin/qr'`, so the module card in the console links to the settings page
    - add a public `qr.<fqdn>` site block to `generate_caddyfile()`, gated on that module
      being installed
 4. Restarts `takwerx-console`.
@@ -73,10 +75,14 @@ onto another service's site. `install.sh`:
    post-update auto-deploy side effects (Authentik compose healing, LDAP outpost
    recreation) as an unwanted side effect.
 
-Once installed, the page is public at `https://qr.<your-fqdn>` — no console login
-required, same as MediaMTX's other public HLS/viewer routes.
+Once installed, the public page is at `https://qr.<your-fqdn>` — no console login
+required, same as MediaMTX's other public HLS/viewer routes. The **console-side**
+settings page is at `/admin/qr` (behind the normal console login) — it shows the public
+URL and has an **Uninstall** button with the same password-gated confirmation modal
+every other infra-TAK module uses (mirrors MediaMTX's page). Confirming it re-checks
+your admin password server-side, then runs `uninstall.sh` for you — no SSH needed.
 
-To uninstall:
+To uninstall over SSH instead (does exactly what the console button does):
 
 ```bash
 sudo bash ~/.infra-tak-modules/restreamer-qr/uninstall.sh
@@ -115,7 +121,8 @@ css/style.css         — dark-theme styling, responsive two-column layout
 js/app.js             — form → URL logic, QR rendering, PNG download, clipboard copy
 js/vendor/qrcode.js   — vendored QR encoder (kazuhikoarase/qrcode-generator, MIT)
 js/vendor/README.md   — vendoring note: why it's here instead of a CDN import
-restreamer_qr.py      — infra-TAK module: registers the public /qr Flask route
+restreamer_qr.py      — infra-TAK module: registers the public /qr Flask routes plus
+                        the authenticated /admin/qr settings page and uninstall API
 install.sh            — infra-TAK module installer (patches app.py, syncs static files)
 uninstall.sh          — reverses install.sh
 ```
@@ -128,7 +135,8 @@ uninstall.sh          — reverses install.sh
 | Live URL + QR generation | ✅ Working |
 | Copy URL / download QR as PNG | ✅ Working |
 | ATAK video-alias XML / `tak://` auto-import | ⬜ Not built — out of scope for this tool; QR payload is the raw stream URL only |
-| infra-TAK module install/uninstall | ✅ Working — verified against a copy of infra-TAK's `app.py` and a synthetic Caddyfile: all patches apply cleanly, are idempotent, self-heal an earlier `/qr`-on-restreamer's-domain approach, and round-trip (install then uninstall reproduces the original files byte-for-byte) |
+| infra-TAK module install/uninstall | ✅ Working — verified against a copy of infra-TAK's `app.py` and a synthetic Caddyfile: all patches apply cleanly, are idempotent, self-heal earlier approaches (the `/qr`-on-restreamer's-domain bolt-on, the pre-uninstall-button 4-arg `register_routes()` call, the old display-name wording), and round-trip (install then uninstall reproduces the original files byte-for-byte) |
+| `/admin/qr` console settings page + password-gated Uninstall button | ✅ Working — smoke-tested with a live Flask app: page renders with the correct public URL, wrong password is rejected with 403, correct password passes the check and invokes `uninstall.sh` |
 
 ## Deviations / notes
 

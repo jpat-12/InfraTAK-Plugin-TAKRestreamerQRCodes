@@ -14,17 +14,25 @@
 #   2. Copies restreamer_qr.py + the static QR page (index.html, css/, js/)
 #      into the infra-TAK install directory, under modules/restreamer_qr/.
 #   3. Patches app.py (idempotent — safe to re-run) to:
-#        a. register the module's Flask routes at startup (same convention as
-#           migrate_authentik.py's register_routes(app, login_required,
-#           load_settings, save_settings))
+#        a. register the module's Flask routes at startup (public /qr/*, and
+#           an authenticated /admin/qr settings page + /api/restreamer_qr/
+#           uninstall — same register_routes(app, login_required,
+#           load_settings, save_settings, load_auth, check_password_hash)
+#           convention as migrate_authentik.py)
 #        b. add 'qr': 'qr' to SERVICE_DOMAIN_DEFAULTS, so it gets its own
 #           customizable subdomain (qr.<fqdn> by default) like every other
 #           module
 #        c. add a 'restreamer_qr' entry to detect_modules() (existence-based
 #           — it's static files bundled into the console, nothing to
-#           health-check, same pattern as the cesium_tiles module)
+#           health-check, same pattern as the cesium_tiles module) with
+#           'route': '/admin/qr' so the console's module card links to the
+#           settings page, not the public QR page
 #        d. add a public, standalone qr.<fqdn> site block to
 #           generate_caddyfile(), gated on that module being installed
+#      /admin/qr mirrors mediamtx's password-gated uninstall modal (see
+#      MEDIAMTX_TEMPLATE in app.py) — clicking Uninstall there calls
+#      uninstall.sh via subprocess after re-checking the admin password,
+#      the same as running it over SSH.
 #   4. Restarts the takwerx-console systemd service.
 #   5. Patches the LIVE Caddyfile directly (backup, insert, validate,
 #      reload) so the new domain is live immediately, and removes any
@@ -100,10 +108,15 @@ path = sys.argv[1]
 with open(path, 'r', encoding='utf-8') as f:
     src = f.read()
 
-# 4a. Register routes at startup.
+# 4a. Register routes at startup. register_routes() grew two params
+# (load_auth, check_password_hash) to support /admin/qr's password-gated
+# uninstall button — self-heal an older 4-arg call site in place rather
+# than leaving it stale.
 REG_MARKER = '[restreamer_qr] Failed to register'
 OLD_REG_TAIL = "TAK Restreamer QR Codes module: {_e}', flush=True)\n\n"
 NEW_REG_TAIL = "TAK Video Stream QR Codes module: {_e}', flush=True)\n\n"
+OLD_CALL_LINE = "    _restreamer_qr_module.register_routes(app, login_required, load_settings, save_settings)\n"
+NEW_CALL_LINE = "    _restreamer_qr_module.register_routes(app, login_required, load_settings, save_settings, load_auth, check_password_hash)\n"
 if REG_MARKER not in src:
     anchor = "# === Main Entry Point (fallback for direct python3 app.py) ===\n"
     if anchor not in src:
@@ -112,17 +125,24 @@ if REG_MARKER not in src:
     block = (
         "try:\n"
         "    import restreamer_qr as _restreamer_qr_module\n"
-        "    _restreamer_qr_module.register_routes(app, login_required, load_settings, save_settings)\n"
+        + NEW_CALL_LINE +
         "except Exception as _e:\n"
         "    print(f'[restreamer_qr] Failed to register " + NEW_REG_TAIL
     )
     src = src.replace(anchor, block + anchor, 1)
     print("    + registered restreamer_qr.register_routes()")
-elif OLD_REG_TAIL in src:
-    src = src.replace(OLD_REG_TAIL, NEW_REG_TAIL, 1)
-    print("    + renamed display text in registration failure message")
 else:
-    print("    = module registration already present")
+    healed = False
+    if OLD_CALL_LINE in src:
+        src = src.replace(OLD_CALL_LINE, NEW_CALL_LINE, 1)
+        healed = True
+        print("    + upgraded register_routes() call with load_auth/check_password_hash")
+    if OLD_REG_TAIL in src:
+        src = src.replace(OLD_REG_TAIL, NEW_REG_TAIL, 1)
+        healed = True
+        print("    + renamed display text in registration failure message")
+    if not healed:
+        print("    = module registration already present and current")
 
 # 4b. Give it its own subdomain via SERVICE_DOMAIN_DEFAULTS (qr.<fqdn> by
 # default, customizable from settings like every other service).
@@ -138,32 +158,46 @@ else:
 
 # 4c. Register with detect_modules() — existence-based, no health check
 # needed since it's just static files bundled into the console (same
-# pattern as the cesium_tiles module).
+# pattern as the cesium_tiles module). 'route' points at /admin/qr (the
+# authenticated settings page with the uninstall button), not the public
+# /qr page, matching every other module's convention that 'route' is
+# where an admin manages the service.
 DETECT_ANCHOR = "    return dict(sorted(modules.items(), key=lambda x: x[1].get('priority', 99)))"
-
-def _detect_block(display_name):
-    return (
-        "    # " + display_name + " — public, static QR generator page; always\n"
-        "    # available once installed since it's just files bundled into the console,\n"
-        "    # no separate process to health-check.\n"
-        "    qr_installed = os.path.exists(os.path.join(BASE_DIR, 'modules', 'restreamer_qr', 'index.html'))\n"
-        "    modules['restreamer_qr'] = {'name': '" + display_name + "', 'installed': qr_installed, 'running': qr_installed,\n"
-        "        'description': 'Public QR code generator for RTMP/RTSP/SRT stream URLs', 'icon': '\U0001F4F1', 'route': '/qr', 'priority': 13}\n"
-    )
-
-DETECT_BLOCK = _detect_block('TAK Video Stream QR Codes')
-OLD_DETECT_BLOCK = _detect_block('TAK Restreamer QR Codes')
+DETECT_BLOCK = (
+    "    # TAK Video Stream QR Codes — public, static QR generator page; always\n"
+    "    # available once installed since it's just files bundled into the console,\n"
+    "    # no separate process to health-check.\n"
+    "    qr_installed = os.path.exists(os.path.join(BASE_DIR, 'modules', 'restreamer_qr', 'index.html'))\n"
+    "    modules['restreamer_qr'] = {'name': 'TAK Video Stream QR Codes', 'installed': qr_installed, 'running': qr_installed,\n"
+    "        'description': 'Public QR code generator for RTMP/RTSP/SRT stream URLs', 'icon': '\U0001F4F1', 'route': '/admin/qr', 'priority': 13}\n"
+)
 if "modules['restreamer_qr']" not in src:
     if DETECT_ANCHOR not in src:
         print("ERROR: could not find detect_modules() return anchor in app.py — module NOT registered", file=sys.stderr)
         sys.exit(1)
     src = src.replace(DETECT_ANCHOR, DETECT_BLOCK + DETECT_ANCHOR, 1)
     print("    + added restreamer_qr entry to detect_modules()")
-elif OLD_DETECT_BLOCK in src:
-    src = src.replace(OLD_DETECT_BLOCK, DETECT_BLOCK, 1)
-    print("    + renamed display name in detect_modules()")
 else:
-    print("    = detect_modules() already has restreamer_qr")
+    # Surgical, independent fixes rather than exact whole-block matching —
+    # display name and route were changed independently across versions of
+    # this installer, so a prior deploy could have either alone or neither.
+    healed = False
+    if "    # TAK Restreamer QR Codes — public, static QR generator page; always" in src:
+        src = src.replace(
+            "    # TAK Restreamer QR Codes — public, static QR generator page; always",
+            "    # TAK Video Stream QR Codes — public, static QR generator page; always", 1)
+        healed = True
+        print("    + renamed comment above restreamer_qr entry in detect_modules()")
+    if "'name': 'TAK Restreamer QR Codes'" in src:
+        src = src.replace("'name': 'TAK Restreamer QR Codes'", "'name': 'TAK Video Stream QR Codes'", 1)
+        healed = True
+        print("    + renamed display name in detect_modules()")
+    if "'route': '/qr', 'priority': 13}" in src:
+        src = src.replace("'route': '/qr', 'priority': 13}", "'route': '/admin/qr', 'priority': 13}", 1)
+        healed = True
+        print("    + pointed detect_modules() route at /admin/qr")
+    if not healed:
+        print("    = detect_modules() already has restreamer_qr and is current")
 
 # 4d. Add its own public site block to generate_caddyfile(). The console's
 # own gunicorn listens with a self-signed cert on :5001 (see this function's
