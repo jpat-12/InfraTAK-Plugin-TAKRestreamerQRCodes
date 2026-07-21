@@ -12,10 +12,13 @@ call register_routes() at startup, following the same convention as
 migrate_authentik.py's register_routes(app, login_required, load_settings,
 save_settings).
 
-Reaching /qr from the outside requires a Caddy route in MediaMTX's site
-block (install.sh does not touch the live Caddyfile — see this repo's
-README for the one-line addition to generate_caddyfile() and the "Deploy"
-click needed to apply it).
+This is a standalone infra-TAK module with its own subdomain (qr.<fqdn> by
+default) — install.sh also patches SERVICE_DOMAIN_DEFAULTS, detect_modules(),
+and generate_caddyfile() so it gets a public top-level Caddy site like every
+other module, plus patches the live Caddyfile directly so it's reachable
+immediately (no manual Deploy click needed). Caddy rewrites all requests on
+that subdomain to /qr{uri} before proxying here, which is why every route
+below still lives under the /qr prefix.
 """
 import os
 from flask import send_from_directory, redirect

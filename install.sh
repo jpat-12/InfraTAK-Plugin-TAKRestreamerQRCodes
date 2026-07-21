@@ -2,24 +2,35 @@
 # install.sh — install/update the TAK Restreamer QR Codes module into a
 # running infra-TAK console.
 #
+# This is a standalone infra-TAK module (its own subdomain, e.g.
+# qr.prod.ilwg.us) — not a plugin bolted onto the tak-video-restreamer's own
+# site. It follows the same "each service gets its own domain" pattern as
+# every other infra-TAK module (nodered, webodm, mediamtx, ...).
+#
 # What it does:
 #   1. Makes sure this repo lives at a canonical checkout (~/.infra-tak-modules/
 #      restreamer-qr) so the console's own update flow always knows where to
 #      `git pull` from.
 #   2. Copies restreamer_qr.py + the static QR page (index.html, css/, js/)
 #      into the infra-TAK install directory, under modules/restreamer_qr/.
-#   3. Patches app.py (idempotent — safe to re-run) to register the module's
-#      routes at startup, same convention as migrate_authentik.py's
-#      register_routes(app, login_required, load_settings, save_settings).
-#   4. Adds the /qr route to MediaMTX's Caddy site block inside
-#      generate_caddyfile() (idempotent), so the next Caddy deploy serves
-#      /qr on MediaMTX's own domain (e.g. stream.prod.ilwg.us/qr).
-#   5. Restarts the takwerx-console systemd service.
-#
-# This does NOT regenerate/reload the live Caddyfile — that only happens
-# when infra-TAK itself calls generate_caddyfile() (e.g. Settings > Caddy >
-# Deploy, or any settings save that already triggers a Caddy regen). Click
-# Deploy on the Caddy page once after installing to pick up the new route.
+#   3. Patches app.py (idempotent — safe to re-run) to:
+#        a. register the module's Flask routes at startup (same convention as
+#           migrate_authentik.py's register_routes(app, login_required,
+#           load_settings, save_settings))
+#        b. add 'qr': 'qr' to SERVICE_DOMAIN_DEFAULTS, so it gets its own
+#           customizable subdomain (qr.<fqdn> by default) like every other
+#           module
+#        c. add a 'restreamer_qr' entry to detect_modules() (existence-based
+#           — it's static files bundled into the console, nothing to
+#           health-check, same pattern as the cesium_tiles module)
+#        d. add a public, standalone qr.<fqdn> site block to
+#           generate_caddyfile(), gated on that module being installed
+#   4. Restarts the takwerx-console systemd service.
+#   5. Patches the LIVE Caddyfile directly (backup, insert, validate,
+#      reload) so the new domain is live immediately, and removes any
+#      leftover /qr-path block from an earlier version of this installer
+#      that bolted /qr onto the streaming site's domain instead of giving it
+#      its own.
 #
 # Usage:
 #   sudo bash install.sh            # first-time install (or full re-install)
@@ -83,7 +94,7 @@ echo "==> Synced restreamer_qr.py (v${MODULE_VERSION:-unknown}) + modules/restre
 
 # --- 4. Patch app.py (idempotent) ----------------------------------------
 python3 - "$CONSOLE_DIR/app.py" <<'PYEOF'
-import sys
+import re, sys
 
 path = sys.argv[1]
 with open(path, 'r', encoding='utf-8') as f:
@@ -108,16 +119,84 @@ if REG_MARKER not in src:
 else:
     print("    = module registration already present")
 
-# 4b. Add the /qr route to MediaMTX's Caddy site block.
-# The console's own gunicorn listens with a self-signed cert on :5001 (see
-# this same function's other reverse_proxy 127.0.0.1:5001 blocks) — a bare
-# reverse_proxy speaks plain HTTP to it and gets a TLS handshake back,
-# surfacing as a 502. Match the transport block those use.
-CADDY_MARKER = '# TAK Restreamer QR Codes — public /qr route'
+# 4b. Give it its own subdomain via SERVICE_DOMAIN_DEFAULTS (qr.<fqdn> by
+# default, customizable from settings like every other service).
+if "'qr': 'qr'," not in src:
+    m = re.search(r"(SERVICE_DOMAIN_DEFAULTS\s*=\s*\{)(.*?)(\n\})", src, re.DOTALL)
+    if not m:
+        print("ERROR: could not find SERVICE_DOMAIN_DEFAULTS in app.py — Caddy route NOT added", file=sys.stderr)
+        sys.exit(1)
+    src = src[:m.start(3)] + "\n    'qr': 'qr'," + src[m.start(3):]
+    print("    + added 'qr': 'qr' to SERVICE_DOMAIN_DEFAULTS")
+else:
+    print("    = SERVICE_DOMAIN_DEFAULTS already has 'qr'")
 
-def _render_caddy_block():
-    return (
-        '        lines.append(f"    ' + CADDY_MARKER + '")\n'
+# 4c. Register with detect_modules() — existence-based, no health check
+# needed since it's just static files bundled into the console (same
+# pattern as the cesium_tiles module).
+DETECT_ANCHOR = "    return dict(sorted(modules.items(), key=lambda x: x[1].get('priority', 99)))"
+DETECT_BLOCK = (
+    "    # TAK Restreamer QR Codes — public, static QR generator page; always\n"
+    "    # available once installed since it's just files bundled into the console,\n"
+    "    # no separate process to health-check.\n"
+    "    qr_installed = os.path.exists(os.path.join(BASE_DIR, 'modules', 'restreamer_qr', 'index.html'))\n"
+    "    modules['restreamer_qr'] = {'name': 'TAK Restreamer QR Codes', 'installed': qr_installed, 'running': qr_installed,\n"
+    "        'description': 'Public QR code generator for RTMP/RTSP/SRT stream URLs', 'icon': '\U0001F4F1', 'route': '/qr', 'priority': 13}\n"
+)
+if "modules['restreamer_qr']" not in src:
+    if DETECT_ANCHOR not in src:
+        print("ERROR: could not find detect_modules() return anchor in app.py — module NOT registered", file=sys.stderr)
+        sys.exit(1)
+    src = src.replace(DETECT_ANCHOR, DETECT_BLOCK + DETECT_ANCHOR, 1)
+    print("    + added restreamer_qr entry to detect_modules()")
+else:
+    print("    = detect_modules() already has restreamer_qr")
+
+# 4d. Add its own public site block to generate_caddyfile(). The console's
+# own gunicorn listens with a self-signed cert on :5001 (see this function's
+# other reverse_proxy 127.0.0.1:5001 blocks) — a bare reverse_proxy speaks
+# plain HTTP to it and gets a TLS handshake back (502), so match the
+# transport block those use. `rewrite * /qr{uri}` maps the subdomain's own
+# root to the Flask blueprint's /qr/* routes.
+CADDY_QR_BLOCK = (
+    "    qr_svc = modules.get('restreamer_qr', {})\n"
+    "    if qr_svc.get('installed'):\n"
+    "        qr_host = sd['qr']\n"
+    "        lines.append(f\"# TAK Restreamer QR Codes — public stream QR generator\")\n"
+    "        lines.append(f\"{qr_host} {{\")\n"
+    "        lines.append(f\"    route {{\")\n"
+    "        lines.append(f\"        rewrite * /qr{{uri}}\")\n"
+    "        lines.append(f\"        reverse_proxy 127.0.0.1:5001 {{\")\n"
+    "        lines.append(f\"            transport http {{\")\n"
+    "        lines.append(f\"                tls\")\n"
+    "        lines.append(f\"                tls_insecure_skip_verify\")\n"
+    "        lines.append(f\"                read_timeout 1h\")\n"
+    "        lines.append(f\"                write_timeout 1h\")\n"
+    "        lines.append(f\"            }}\")\n"
+    "        lines.append(f\"        }}\")\n"
+    "        lines.append(f\"    }}\")\n"
+    "        lines.append(f\"}}\")\n"
+    "        lines.append(\"\")\n"
+    "        _emit_alias_redirect(_get_service_alias(settings, 'qr'), qr_host)\n"
+    "\n"
+)
+GEN_ANCHOR = "\n    caddyfile = '\\n'.join(lines)\n"
+if "qr_svc = modules.get('restreamer_qr'" not in src:
+    if GEN_ANCHOR not in src:
+        print("ERROR: could not find generate_caddyfile() assembly anchor in app.py — Caddy route NOT added", file=sys.stderr)
+        sys.exit(1)
+    src = src.replace(GEN_ANCHOR, "\n" + CADDY_QR_BLOCK + "    caddyfile = '\\n'.join(lines)\n", 1)
+    print("    + added qr.<fqdn> site block to generate_caddyfile()")
+else:
+    print("    = generate_caddyfile() already emits the qr site block")
+
+# 4e. Clean up an earlier version of this installer's approach: it bolted a
+# /qr path onto MediaMTX's Caddy site block instead of giving this module
+# its own domain. Remove that dead code if present.
+OLD_CADDY_MARKER = '# TAK Restreamer QR Codes — public /qr route'
+OLD_CADDY_BLOCKS = [
+    (
+        '        lines.append(f"    ' + OLD_CADDY_MARKER + '")\n'
         '        lines.append(f"    handle /qr* {{")\n'
         '        lines.append(f"        reverse_proxy 127.0.0.1:5001 {{")\n'
         '        lines.append(f"            transport http {{")\n'
@@ -128,31 +207,19 @@ def _render_caddy_block():
         '        lines.append(f"            }}")\n'
         '        lines.append(f"        }}")\n'
         '        lines.append(f"    }}")\n'
-    )
-
-CURRENT_CADDY_BLOCK = _render_caddy_block()
-
-# Earlier installer versions wrote a bare `reverse_proxy 127.0.0.1:5001`
-# (no TLS transport) via `route /qr /qr/*`. Self-heal it if present.
-OLD_CADDY_BLOCK = (
-    '        lines.append(f"    ' + CADDY_MARKER + '")\n'
-    '        lines.append(f"    route /qr /qr/* {{")\n'
-    '        lines.append(f"        reverse_proxy 127.0.0.1:5001")\n'
-    '        lines.append(f"    }}")\n'
-)
-
-if CURRENT_CADDY_BLOCK in src:
-    print("    = /qr Caddy route already present (current)")
-elif OLD_CADDY_BLOCK in src:
-    src = src.replace(OLD_CADDY_BLOCK, CURRENT_CADDY_BLOCK, 1)
-    print("    + upgraded generate_caddyfile()'s /qr route to fix TLS transport")
-else:
-    anchor = '        lines.append(f"# MediaMTX Web Console")\n        lines.append(f"{mtx_host} {{")\n'
-    if anchor not in src:
-        print("ERROR: could not find MediaMTX site-block anchor in generate_caddyfile() — Caddy route NOT added", file=sys.stderr)
-        sys.exit(1)
-    src = src.replace(anchor, anchor + CURRENT_CADDY_BLOCK, 1)
-    print("    + added /qr route to generate_caddyfile()'s MediaMTX block")
+    ),
+    (
+        '        lines.append(f"    ' + OLD_CADDY_MARKER + '")\n'
+        '        lines.append(f"    route /qr /qr/* {{")\n'
+        '        lines.append(f"        reverse_proxy 127.0.0.1:5001")\n'
+        '        lines.append(f"    }}")\n'
+    ),
+]
+for old in OLD_CADDY_BLOCKS:
+    if old in src:
+        src = src.replace(old, '', 1)
+        print("    - removed old /qr-on-MediaMTX-block code from generate_caddyfile()")
+        break
 
 with open(path, 'w', encoding='utf-8') as f:
     f.write(src)
@@ -183,28 +250,86 @@ fi
 # produce the identical block; the next real regen just overwrites this one
 # with the same content.
 CADDYFILE=/etc/caddy/Caddyfile
+SETTINGS="$CONSOLE_DIR/.config/settings.json"
 if [ ! -f "$CADDYFILE" ]; then
     echo "==> No $CADDYFILE yet — Caddy not deployed. Deploy Caddy from the"
     echo "    console once, then re-run this script (or install.sh --sync) to"
-    echo "    add the /qr route."
+    echo "    add the qr.<fqdn> site."
+elif [ ! -f "$SETTINGS" ]; then
+    echo "==> No $SETTINGS yet — base FQDN not configured. Set it up on the"
+    echo "    Caddy page, then re-run this script."
 else
-    CADDY_MARKER='# TAK Restreamer QR Codes — public /qr route'
     CADDY_BAK="$CADDYFILE.bak-$(date +%Y%m%d-%H%M%S)"
     cp -a "$CADDYFILE" "$CADDY_BAK"
-    PATCH_RESULT="$(python3 - "$CADDYFILE" "$CADDY_MARKER" <<'PYEOF'
-import re, sys
+    PATCH_RESULT="$(python3 - "$CADDYFILE" "$SETTINGS" <<'PYEOF'
+import json, re, sys
 
-path, marker = sys.argv[1], sys.argv[2]
-with open(path, 'r', encoding='utf-8') as f:
+caddyfile_path, settings_path = sys.argv[1], sys.argv[2]
+with open(caddyfile_path, 'r', encoding='utf-8') as f:
     src = f.read()
+with open(settings_path, 'r', encoding='utf-8') as f:
+    settings = json.load(f)
 
-# The console's own gunicorn listens with a self-signed cert on :5001 (see
-# generate_caddyfile()'s other reverse_proxy 127.0.0.1:5001 blocks) — a bare
-# reverse_proxy speaks plain HTTP to it and Caddy gets a TLS handshake back,
-# which surfaces as a 502. Match the transport block those use.
-def render(marker):
+fqdn = (settings.get('fqdn') or '').strip()
+if not fqdn:
+    print("ERROR: no fqdn set in settings.json", file=sys.stderr)
+    sys.exit(1)
+
+# Mirrors app.py's _get_service_domain(settings, 'qr'): custom qr_domain
+# override (bare label gets the base fqdn appended, a dotted value is used
+# as-is), else the "qr" subdomain of the base fqdn.
+custom = (settings.get('qr_domain') or '').strip()
+if custom:
+    qr_host = custom if '.' in custom else f'{custom}.{fqdn}'
+else:
+    qr_host = f'qr.{fqdn}'
+
+def render(host):
     return (
-        f'    {marker}\n'
+        f'# TAK Restreamer QR Codes — public stream QR generator\n'
+        f'{host} {{\n'
+        '    route {\n'
+        '        rewrite * /qr{uri}\n'
+        '        reverse_proxy 127.0.0.1:5001 {\n'
+        '            transport http {\n'
+        '                tls\n'
+        '                tls_insecure_skip_verify\n'
+        '                read_timeout 1h\n'
+        '                write_timeout 1h\n'
+        '            }\n'
+        '        }\n'
+        '    }\n'
+        '}\n'
+        '\n'
+    )
+
+CURRENT_BLOCK = render(qr_host)
+
+# Remove any previously-inserted block for THIS module regardless of which
+# host it names — a changed qr_domain override means the host in the file
+# won't match qr_host anymore, and anchoring on the marker comment (not the
+# host) is what lets us find and replace it instead of leaving a duplicate.
+HOST_BLOCK_RE = re.compile(
+    re.escape('# TAK Restreamer QR Codes — public stream QR generator\n') +
+    r'[^\n]+\{.*?\n\}\n\n?',
+    re.DOTALL,
+)
+existing = HOST_BLOCK_RE.search(src)
+if existing and existing.group(0) == CURRENT_BLOCK:
+    print("unchanged")
+    sys.exit(0)
+
+changed = False
+if existing:
+    src = src[:existing.start()] + src[existing.end():]
+    changed = True
+
+# Also strip the old /qr-path-on-the-streaming-site approach from an
+# earlier version of this installer, if still present.
+OLD_MARKER = '# TAK Restreamer QR Codes — public /qr route'
+OLD_BLOCKS = [
+    (
+        f'    {OLD_MARKER}\n'
         '    handle /qr* {\n'
         '        reverse_proxy 127.0.0.1:5001 {\n'
         '            transport http {\n'
@@ -215,72 +340,51 @@ def render(marker):
         '            }\n'
         '        }\n'
         '    }\n'
-    )
-
-CURRENT_BLOCK = render(marker)
-
-# Older versions of this installer wrote a bare `reverse_proxy 127.0.0.1:5001`
-# (no TLS transport, causes a 502) using either `route /qr /qr/*` or
-# `handle /qr*`. Detect and self-heal either shape in place.
-OLD_BLOCKS = [
-    f'    {marker}\n    route /qr /qr/* {{\n        reverse_proxy 127.0.0.1:5001\n    }}\n',
-    f'    {marker}\n    handle /qr* {{\n        reverse_proxy 127.0.0.1:5001\n    }}\n',
+    ),
+    (
+        f'    {OLD_MARKER}\n'
+        '    handle /qr* {\n'
+        '        reverse_proxy 127.0.0.1:5001\n'
+        '    }\n'
+    ),
+    (
+        f'    {OLD_MARKER}\n'
+        '    route /qr /qr/* {\n'
+        '        reverse_proxy 127.0.0.1:5001\n'
+        '    }\n'
+    ),
 ]
-
-if CURRENT_BLOCK in src:
-    print("unchanged")
-    sys.exit(0)
-
-healed = False
 for old in OLD_BLOCKS:
     if old in src:
-        src = src.replace(old, CURRENT_BLOCK, 1)
-        healed = True
-        break
+        src = src.replace(old, '', 1)
+        changed = True
+        print(f"    - removed old /qr-on-streaming-site block", file=sys.stderr)
 
-if not healed:
-    # Anchor on the streaming site's header comment + host-open line. Tried
-    # in order: a hand-added "TAK Video Restreamer" block (confirmed the
-    # real shape on ILWG's server — tak-video-restreamer's own Flask app on
-    # :3100, fronted directly by Caddy, not generated by infra-TAK's
-    # generate_caddyfile()) falling back to infra-TAK's generic "MediaMTX
-    # Web Console" block for setups that use that instead. Either way we
-    # don't need to know the literal host.
-    ANCHOR_PATTERNS = [
-        r'# TAK Video Restreamer[^\n]*\n[^\n]+\{\n',
-        r'# MediaMTX Web Console\n[^\n]+\{\n',
-    ]
-    m = None
-    for pat in ANCHOR_PATTERNS:
-        m = re.search(pat, src)
-        if m:
-            break
-    if not m:
-        print("ERROR: could not find the streaming site's block in live Caddyfile (looked for a "
-              "'TAK Video Restreamer' or 'MediaMTX Web Console' header) — is it deployed under a "
-              "different name?", file=sys.stderr)
-        sys.exit(1)
-    src = src[:m.end()] + CURRENT_BLOCK + src[m.end():]
+# Insert the new top-level site block right after the auto-generated
+# header (position doesn't matter functionally — distinct hostnames are
+# independent — this just keeps it readable near the top).
+HEADER_RE = re.compile(r'^# infra-TAK - Auto-generated Caddyfile\n# Base Domain: [^\n]*\n\n', re.MULTILINE)
+hm = HEADER_RE.match(src)
+insert_at = hm.end() if hm else 0
+src = src[:insert_at] + CURRENT_BLOCK + src[insert_at:]
 
-with open(path, 'w', encoding='utf-8') as f:
+with open(caddyfile_path, 'w', encoding='utf-8') as f:
     f.write(src)
-print("healed" if healed else "inserted")
+print("changed")
 PYEOF
 )"
     PATCH_OK=$?
     if [ "$PATCH_RESULT" = "unchanged" ]; then
-        echo "==> Live Caddyfile already has the current /qr route — nothing to patch"
+        echo "==> Live Caddyfile already has the current qr.<fqdn> site — nothing to patch"
         rm -f "$CADDY_BAK"
     elif [ "$PATCH_OK" -ne 0 ]; then
-        echo "    ⚠ Could not patch live Caddyfile — left unchanged. Add the /qr" >&2
-        echo "      route manually or via the console's Caddy > Deploy button." >&2
+        echo "    ⚠ Could not patch live Caddyfile — left unchanged: $PATCH_RESULT" >&2
         rm -f "$CADDY_BAK"
     elif command -v caddy >/dev/null 2>&1 && ! caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
         echo "ERROR: caddy validate failed after patch — restoring previous Caddyfile" >&2
         cp -a "$CADDY_BAK" "$CADDYFILE"
     else
-        [ "$PATCH_RESULT" = "healed" ] && echo "    + upgraded existing /qr route to fix TLS transport (was causing 502s)"
-        [ "$PATCH_RESULT" = "inserted" ] && echo "    + inserted /qr route into live Caddyfile"
+        echo "    + added/updated qr.<fqdn> site in live Caddyfile"
         echo "    ✓ Caddyfile validates (backup: $CADDY_BAK)"
         if systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null; then
             echo "    ✓ Caddy reloaded"
@@ -292,7 +396,7 @@ fi
 
 echo ""
 echo "✓ TAK Restreamer QR Codes module installed."
-echo "  Page should now be public at https://<mediamtx-domain>/qr"
-echo "  (e.g. stream.prod.ilwg.us/qr). If Caddy wasn't deployed yet, or the"
-echo "  live-Caddyfile patch above reported a warning, open the Caddy page in"
-echo "  the console and click Deploy once to pick it up."
+echo "  Public page: https://qr.<your-fqdn> (customizable via a 'qr_domain'"
+echo "  setting, same as every other infra-TAK service). If Caddy wasn't"
+echo "  deployed yet, or the live-Caddyfile patch above reported a warning,"
+echo "  open the Caddy page in the console and click Deploy once to pick it up."

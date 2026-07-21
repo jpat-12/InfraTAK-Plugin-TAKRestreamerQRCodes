@@ -5,10 +5,11 @@ QR code — instead of hand-typing an RTSP/RTMP/SRT URL on a phone, point a came
 QR code. Built to match the connection format served by
 [raytheonbbn/tak-video-restreamer](https://github.com/raytheonbbn/tak-video-restreamer).
 
-Static HTML/CSS/JS, no build step, no server-side component, no network calls at
-runtime — everything (including QR generation) happens in the browser. That makes it
-safe to host anywhere, including as a public path off the restreamer's own domain, e.g.
-`stream.prod.ilwg.us/qr`.
+Static HTML/CSS/JS, no build step, no network calls at runtime — everything (including
+QR generation) happens in the browser. That makes it safe to host anywhere. As an
+infra-TAK module (see below) it gets its own public subdomain, e.g. `qr.prod.ilwg.us` —
+it isn't a plugin for the tak-video-restreamer itself and doesn't share its domain or
+Caddy site.
 
 ## Run it standalone
 
@@ -33,21 +34,31 @@ cd InfraTAK-Plugin-TAKRestreamerQRCodes
 sudo bash install.sh
 ```
 
-This:
+This is a standalone infra-TAK module — its own subdomain (`qr.<fqdn>` by default,
+customizable via a `qr_domain` setting, same as every other module), not a path bolted
+onto another service's site. `install.sh`:
+
 1. Copies itself to a canonical checkout at `~/.infra-tak-modules/restreamer-qr`.
 2. Copies `restreamer_qr.py` and the static page into the console's
    `modules/restreamer_qr/` directory.
-3. Patches `app.py` (idempotent — safe to re-run) to register the `/qr` route at
-   startup, and adds a `route /qr /qr/*` block to MediaMTX's Caddy site inside
-   `generate_caddyfile()`.
+3. Patches `app.py` (idempotent — safe to re-run) to:
+   - register the module's Flask routes (`/qr`, `/qr/`, `/qr/<file>`) at startup
+   - add `'qr': 'qr'` to `SERVICE_DOMAIN_DEFAULTS` so it gets its own domain
+   - add a `restreamer_qr` entry to `detect_modules()` (existence-based — it's static
+     files bundled into the console, nothing to health-check)
+   - add a public `qr.<fqdn>` site block to `generate_caddyfile()`, gated on that module
+     being installed
 4. Restarts `takwerx-console`.
+5. Patches the **live** `/etc/caddy/Caddyfile` directly (backup → insert → `caddy
+   validate` → reload, rolling back on failure) so the page is reachable immediately —
+   no manual "Deploy" click needed. This mirrors
+   `InfraTAK-Module-MigrateAuthentik/scripts/authentik-repoint-caddy.sh` rather than
+   importing `app.py` to call `generate_caddyfile()` directly, which would also fire its
+   post-update auto-deploy side effects (Authentik compose healing, LDAP outpost
+   recreation) as an unwanted side effect.
 
-**One manual step after installing**: open the Caddy page in the console and click
-**Deploy** (or save any setting that already triggers a Caddy regen) — `install.sh`
-patches the *generator function*, not the live `/etc/caddy/Caddyfile`, so the new `/qr`
-route only reaches the actual config on the next regen. Once deployed, the page is
-public at `https://<mediamtx-domain>/qr` (e.g. `stream.prod.ilwg.us/qr`) — no console
-login required, matching the rest of MediaMTX's public HLS/viewer routes.
+Once installed, the page is public at `https://qr.<your-fqdn>` — no console login
+required, same as MediaMTX's other public HLS/viewer routes.
 
 To uninstall:
 
@@ -55,8 +66,9 @@ To uninstall:
 sudo bash ~/.infra-tak-modules/restreamer-qr/uninstall.sh
 ```
 
-Reverses the `app.py` patch and deletes the synced files, then click **Deploy** on the
-Caddy page again so the `/qr` route actually drops out of the live config.
+Reverses every patch above and deletes the synced files, then patches the live
+Caddyfile to remove the `qr.<fqdn>` site and reloads Caddy — fully automatic, no manual
+Deploy click needed either way.
 
 ## How it works
 
@@ -96,7 +108,7 @@ uninstall.sh          — reverses install.sh
 | Live URL + QR generation | ✅ Working |
 | Copy URL / download QR as PNG | ✅ Working |
 | ATAK video-alias XML / `tak://` auto-import | ⬜ Not built — out of scope for this tool; QR payload is the raw stream URL only |
-| infra-TAK module install/uninstall | ✅ Working — verified against a copy of infra-TAK's `app.py`: patch applies cleanly, is idempotent, and round-trips (install then uninstall reproduces the original file byte-for-byte) |
+| infra-TAK module install/uninstall | ✅ Working — verified against a copy of infra-TAK's `app.py` and a synthetic Caddyfile: all patches apply cleanly, are idempotent, self-heal an earlier `/qr`-on-restreamer's-domain approach, and round-trip (install then uninstall reproduces the original files byte-for-byte) |
 
 ## Deviations / notes
 

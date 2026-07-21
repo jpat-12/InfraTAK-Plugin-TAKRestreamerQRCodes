@@ -4,13 +4,14 @@
 #
 # Reverses exactly what install.sh applied:
 #   1. Removes the restreamer_qr.register_routes() block from app.py
-#   2. Removes the /qr route from generate_caddyfile()'s MediaMTX block
-#   3. Deletes restreamer_qr.py and modules/restreamer_qr/ from the console
-#   4. Restarts takwerx-console so the removal takes effect immediately
-#
-# Does NOT regenerate/reload the live Caddyfile — click Deploy on the Caddy
-# page (or save any setting that triggers a regen) after uninstalling so the
-# /qr route actually disappears from the served config.
+#   2. Removes 'qr': 'qr' from SERVICE_DOMAIN_DEFAULTS
+#   3. Removes the restreamer_qr entry from detect_modules()
+#   4. Removes the qr.<fqdn> site-block code from generate_caddyfile()
+#   5. Deletes restreamer_qr.py and modules/restreamer_qr/ from the console
+#   6. Restarts takwerx-console so the removal takes effect immediately
+#   7. Removes the qr.<fqdn> site block from the LIVE Caddyfile and reloads
+#      Caddy (also cleans up the older /qr-on-streaming-site approach if
+#      it's still present from an earlier version of this installer)
 #
 # Safe to run even if the module was never installed (no-ops cleanly).
 #
@@ -42,12 +43,13 @@ fi
 echo "==> infra-TAK console: $CONSOLE_DIR"
 
 python3 - "$CONSOLE_DIR/app.py" <<'PYEOF'
-import sys
+import re, sys
 
 path = sys.argv[1]
 with open(path, 'r', encoding='utf-8') as f:
     src = f.read()
 
+# 1. Route registration
 REG_BLOCK = (
     "try:\n"
     "    import restreamer_qr as _restreamer_qr_module\n"
@@ -61,11 +63,56 @@ if REG_BLOCK in src:
 else:
     print("    = module registration not present, nothing to remove")
 
-CADDY_MARKER = '# TAK Restreamer QR Codes — public /qr route'
-CANDIDATE_GEN_BLOCKS = [
-    # current (TLS transport, handle)
+# 2. SERVICE_DOMAIN_DEFAULTS entry
+if "\n    'qr': 'qr'," in src:
+    src = src.replace("\n    'qr': 'qr',", "", 1)
+    print("    - removed 'qr': 'qr' from SERVICE_DOMAIN_DEFAULTS")
+else:
+    print("    = SERVICE_DOMAIN_DEFAULTS has no 'qr' entry, nothing to remove")
+
+# 3. detect_modules() entry
+DETECT_BLOCK = (
+    "    # TAK Restreamer QR Codes — public, static QR generator page; always\n"
+    "    # available once installed since it's just files bundled into the console,\n"
+    "    # no separate process to health-check.\n"
+    "    qr_installed = os.path.exists(os.path.join(BASE_DIR, 'modules', 'restreamer_qr', 'index.html'))\n"
+    "    modules['restreamer_qr'] = {'name': 'TAK Restreamer QR Codes', 'installed': qr_installed, 'running': qr_installed,\n"
+    "        'description': 'Public QR code generator for RTMP/RTSP/SRT stream URLs', 'icon': '\U0001F4F1', 'route': '/qr', 'priority': 13}\n"
+)
+if DETECT_BLOCK in src:
+    src = src.replace(DETECT_BLOCK, '', 1)
+    print("    - removed restreamer_qr entry from detect_modules()")
+else:
+    print("    = detect_modules() has no restreamer_qr entry, nothing to remove")
+
+# 4. generate_caddyfile() site-block code (current shape)
+CADDY_QR_BLOCK = (
+    "    qr_svc = modules.get('restreamer_qr', {})\n"
+    "    if qr_svc.get('installed'):\n"
+    "        qr_host = sd['qr']\n"
+    "        lines.append(f\"# TAK Restreamer QR Codes — public stream QR generator\")\n"
+    "        lines.append(f\"{qr_host} {{\")\n"
+    "        lines.append(f\"    route {{\")\n"
+    "        lines.append(f\"        rewrite * /qr{{uri}}\")\n"
+    "        lines.append(f\"        reverse_proxy 127.0.0.1:5001 {{\")\n"
+    "        lines.append(f\"            transport http {{\")\n"
+    "        lines.append(f\"                tls\")\n"
+    "        lines.append(f\"                tls_insecure_skip_verify\")\n"
+    "        lines.append(f\"                read_timeout 1h\")\n"
+    "        lines.append(f\"                write_timeout 1h\")\n"
+    "        lines.append(f\"            }}\")\n"
+    "        lines.append(f\"        }}\")\n"
+    "        lines.append(f\"    }}\")\n"
+    "        lines.append(f\"}}\")\n"
+    "        lines.append(\"\")\n"
+    "        _emit_alias_redirect(_get_service_alias(settings, 'qr'), qr_host)\n"
+    "\n"
+)
+# Earlier (pre-migration) shape: /qr bolted onto MediaMTX's own site block.
+OLD_CADDY_MARKER = '# TAK Restreamer QR Codes — public /qr route'
+OLD_CADDY_BLOCKS = [
     (
-        '        lines.append(f"    ' + CADDY_MARKER + '")\n'
+        '        lines.append(f"    ' + OLD_CADDY_MARKER + '")\n'
         '        lines.append(f"    handle /qr* {{")\n'
         '        lines.append(f"        reverse_proxy 127.0.0.1:5001 {{")\n'
         '        lines.append(f"            transport http {{")\n'
@@ -77,24 +124,25 @@ CANDIDATE_GEN_BLOCKS = [
         '        lines.append(f"        }}")\n'
         '        lines.append(f"    }}")\n'
     ),
-    # earlier (bare reverse_proxy, route directive — pre-TLS-fix)
     (
-        '        lines.append(f"    ' + CADDY_MARKER + '")\n'
+        '        lines.append(f"    ' + OLD_CADDY_MARKER + '")\n'
         '        lines.append(f"    route /qr /qr/* {{")\n'
         '        lines.append(f"        reverse_proxy 127.0.0.1:5001")\n'
         '        lines.append(f"    }}")\n'
     ),
 ]
 removed = False
-for caddy_block in CANDIDATE_GEN_BLOCKS:
-    if caddy_block in src:
-        src = src.replace(caddy_block, '', 1)
+if CADDY_QR_BLOCK in src:
+    src = src.replace(CADDY_QR_BLOCK, '', 1)
+    removed = True
+for old in OLD_CADDY_BLOCKS:
+    if old in src:
+        src = src.replace(old, '', 1)
         removed = True
-        break
 if removed:
-    print("    - removed /qr route from generate_caddyfile()'s MediaMTX block")
+    print("    - removed qr site-block code from generate_caddyfile()")
 else:
-    print("    = /qr Caddy route not present, nothing to remove")
+    print("    = generate_caddyfile() has no qr site-block code, nothing to remove")
 
 with open(path, 'w', encoding='utf-8') as f:
     f.write(src)
@@ -123,28 +171,38 @@ else
     echo "==> Restart of $CONSOLE_SERVICE requested (systemd-run unavailable, backgrounded instead)"
 fi
 
-# Remove the /qr block from the LIVE Caddyfile too (mirrors install.sh's
-# direct edit — see its step 6 comment for why this doesn't reimport app.py).
+# Remove the qr.<fqdn> block (and any leftover old-style /qr-on-streaming-site
+# block) from the LIVE Caddyfile too, then reload.
 CADDYFILE=/etc/caddy/Caddyfile
-CADDY_MARKER='# TAK Restreamer QR Codes — public /qr route'
-if [ -f "$CADDYFILE" ] && grep -qF "$CADDY_MARKER" "$CADDYFILE"; then
+if [ -f "$CADDYFILE" ]; then
     CADDY_BAK="$CADDYFILE.bak-$(date +%Y%m%d-%H%M%S)"
     cp -a "$CADDYFILE" "$CADDY_BAK"
-    python3 - "$CADDYFILE" "$CADDY_MARKER" <<'PYEOF'
-import sys
+    PATCH_RESULT="$(python3 - "$CADDYFILE" <<'PYEOF'
+import re, sys
 
-path, marker = sys.argv[1], sys.argv[2]
+path = sys.argv[1]
 with open(path, 'r', encoding='utf-8') as f:
     src = f.read()
 
-# Try every shape install.sh has ever written: current (TLS transport,
-# handle), pre-TLS-fix (bare reverse_proxy, handle), and the original
-# attempt (bare reverse_proxy, route) before it turned out the live block
-# needed a "handle" directive to match its sibling /login*, /static*, etc.
-# blocks — see install.sh history.
-CANDIDATE_BLOCKS = [
+changed = False
+
+# Current shape: standalone "qr.<fqdn> { ... }" site, found by marker
+# comment regardless of which host it names.
+HOST_BLOCK_RE = re.compile(
+    re.escape('# TAK Restreamer QR Codes — public stream QR generator\n') +
+    r'[^\n]+\{.*?\n\}\n\n?',
+    re.DOTALL,
+)
+new_src, n = HOST_BLOCK_RE.subn('', src)
+if n:
+    src = new_src
+    changed = True
+
+# Earlier shape: /qr bolted onto the streaming site's own block.
+OLD_MARKER = '# TAK Restreamer QR Codes — public /qr route'
+OLD_BLOCKS = [
     (
-        f'    {marker}\n'
+        f'    {OLD_MARKER}\n'
         '    handle /qr* {\n'
         '        reverse_proxy 127.0.0.1:5001 {\n'
         '            transport http {\n'
@@ -157,32 +215,36 @@ CANDIDATE_BLOCKS = [
         '    }\n'
     ),
     (
-        f'    {marker}\n'
+        f'    {OLD_MARKER}\n'
         '    handle /qr* {\n'
         '        reverse_proxy 127.0.0.1:5001\n'
         '    }\n'
     ),
     (
-        f'    {marker}\n'
+        f'    {OLD_MARKER}\n'
         '    route /qr /qr/* {\n'
         '        reverse_proxy 127.0.0.1:5001\n'
         '    }\n'
     ),
 ]
-removed = False
-for block in CANDIDATE_BLOCKS:
-    if block in src:
-        src = src.replace(block, '', 1)
-        removed = True
-if removed:
-    print("    - removed /qr route from live Caddyfile")
+for old in OLD_BLOCKS:
+    if old in src:
+        src = src.replace(old, '', 1)
+        changed = True
+
 with open(path, 'w', encoding='utf-8') as f:
     f.write(src)
+print("changed" if changed else "unchanged")
 PYEOF
-    if command -v caddy >/dev/null 2>&1 && ! caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
+)"
+    if [ "$PATCH_RESULT" = "unchanged" ]; then
+        echo "==> Live Caddyfile has no qr route to remove"
+        rm -f "$CADDY_BAK"
+    elif command -v caddy >/dev/null 2>&1 && ! caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
         echo "ERROR: caddy validate failed after removal — restoring previous Caddyfile" >&2
         cp -a "$CADDY_BAK" "$CADDYFILE"
     else
+        echo "    - removed qr route(s) from live Caddyfile"
         echo "    ✓ Caddyfile validates (backup: $CADDY_BAK)"
         if systemctl reload caddy 2>/dev/null || systemctl restart caddy 2>/dev/null; then
             echo "    ✓ Caddy reloaded"
@@ -191,7 +253,7 @@ PYEOF
         fi
     fi
 else
-    echo "==> Live Caddyfile has no /qr route to remove"
+    echo "==> No $CADDYFILE — nothing to patch"
 fi
 
 echo ""
