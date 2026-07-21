@@ -219,8 +219,8 @@ button.copied {
   background: #fff;
   padding: 12px;
   border-radius: 8px;
-  min-height: 180px;
-  min-width: 180px;
+  min-height: 200px;
+  min-width: 200px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -228,8 +228,8 @@ button.copied {
 
 #qr-code svg {
   display: block;
-  width: 220px;
-  height: 220px;
+  width: 260px;
+  height: 260px;
 }
 
 #qr-code .qr-placeholder {

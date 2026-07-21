@@ -115,3 +115,14 @@ uninstall.sh          — reverses install.sh
 - Port field auto-fills the protocol's default (8554/1935/8890) until the user edits it
   manually, then stops overriding on protocol switches.
 - Leading slashes on the path field are stripped before building the URL.
+- On first visit, the server address guesses itself from the page's own hostname —
+  `qr.<fqdn>` → `stream.<fqdn>`, matching infra-TAK's own domain convention — so a fresh
+  visit needs zero typing to get a working default. Falls back to blank if the hostname
+  doesn't start with `qr.`.
+- Every field is remembered in `localStorage` between visits, so repeat use (same
+  restreamer, a new camera each time) only needs the path field touched. On reload,
+  focus jumps straight to the path field (with its text pre-selected) once address and
+  port are already filled in; otherwise it goes to the address field.
+- QR uses error-correction level `Q` (25%, up from the library's default `M`) since this
+  is typically scanned straight off a screen rather than print, where glare/moire costs
+  more resolution than the denser code loses.
