@@ -52,9 +52,15 @@
         </div>
 
         <div class="field">
-          <label for="path">Stream Name / Path</label>
+          <label for="path">Stream Path</label>
           <input type="text" id="path" name="path" placeholder="stream1" required />
           <p class="hint">No leading slash needed — added automatically where relevant.</p>
+        </div>
+
+        <div class="field">
+          <label for="stream-name">Stream Name <span class="optional">(optional)</span></label>
+          <input type="text" id="stream-name" name="stream-name" placeholder="Front Gate Cam" />
+          <p class="hint">Human-readable label, sent as a <code>name=</code> query parameter for plugins that read it. Doesn't affect the connection path.</p>
         </div>
 
         <div class="field" id="srt-mode-field" hidden>

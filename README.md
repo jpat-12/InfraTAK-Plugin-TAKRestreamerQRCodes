@@ -74,18 +74,22 @@ Deploy click needed either way.
 
 1. Pick a protocol (RTSP, RTMP, or SRT).
 2. Enter the server address, port (pre-filled with the restreamer's default for that
-   protocol — 8554 / 1935 / 8890), and stream name/path.
-3. For SRT, choose `read` (viewer) or `publish` (encoder) stream-ID mode and optionally
+   protocol — 8554 / 1935 / 8890), and stream path.
+3. Optionally give it a human-readable Stream Name — sent as a `name=` query parameter
+   for plugins that read it (see below); leaving it blank costs the QR nothing extra.
+4. For SRT, choose `read` (viewer) or `publish` (encoder) stream-ID mode and optionally
    add a passphrase.
-4. The stream URL and its QR code update live. Copy the URL or download the QR as a PNG.
+5. The stream URL and its QR code update live. Copy the URL or download the QR as a PNG.
 
 URL shapes generated (matching tak-video-restreamer's conventions):
 
 | Protocol | Shape |
 |---|---|
-| RTSP | `rtsp://{address}:{port}/{path}` |
-| RTMP | `rtmp://{address}:{port}/{path}` |
-| SRT  | `srt://{address}:{port}?streamid={mode}:{path}[&passphrase=...]` |
+| RTSP | `rtsp://{address}:{port}/{path}[?name=...]` |
+| RTMP | `rtmp://{address}:{port}/{path}[?name=...]` |
+| SRT  | `srt://{address}:{port}?streamid={mode}:{path}[&passphrase=...][&name=...]` |
+
+`name` (URL-encoded) is only present when the Stream Name field is filled in.
 
 ## File tree
 

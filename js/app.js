@@ -13,6 +13,7 @@
   var portInput = document.getElementById("port");
   var portHint = document.getElementById("port-hint");
   var pathInput = document.getElementById("path");
+  var streamNameInput = document.getElementById("stream-name");
   var srtModeField = document.getElementById("srt-mode-field");
   var srtModeSelect = document.getElementById("srt-mode");
   var passphraseField = document.getElementById("passphrase-field");
@@ -59,6 +60,7 @@
         port: portInput.value,
         portTouched: portTouched,
         path: pathInput.value,
+        streamName: streamNameInput.value,
         srtMode: srtModeSelect.value,
         passphrase: passphraseInput.value
       }));
@@ -88,6 +90,7 @@
       portTouched = true;
     }
     if (saved.path) pathInput.value = saved.path;
+    if (saved.streamName) streamNameInput.value = saved.streamName;
     if (saved.srtMode) srtModeSelect.value = saved.srtMode;
     if (saved.passphrase) passphraseInput.value = saved.passphrase;
   }
@@ -114,11 +117,16 @@
     var address = addressInput.value.trim();
     var port = portInput.value.trim();
     var streamName = sanitizePath(pathInput.value);
+    var displayName = streamNameInput.value.trim();
 
     if (!address || !port || !streamName) {
       return "";
     }
 
+    // Appended only when set, so the common case (no name) costs the QR
+    // nothing extra — kept as a query param rather than a JSON wrapper so
+    // the payload stays a plain, minimally-sized URL any scanner can read,
+    // while a plugin that cares can still pull `name` out of the query string.
     if (protocol === "srt") {
       var mode = srtModeSelect.value;
       var url = "srt://" + address + ":" + port + "?streamid=" + mode + ":" + streamName;
@@ -126,11 +134,18 @@
       if (passphrase) {
         url += "&passphrase=" + encodeURIComponent(passphrase);
       }
+      if (displayName) {
+        url += "&name=" + encodeURIComponent(displayName);
+      }
       return url;
     }
 
     // rtsp and rtmp both use address:port/path
-    return protocol + "://" + address + ":" + port + "/" + streamName;
+    var url = protocol + "://" + address + ":" + port + "/" + streamName;
+    if (displayName) {
+      url += "?name=" + encodeURIComponent(displayName);
+    }
+    return url;
   }
 
   function renderQr(text) {
