@@ -238,14 +238,3 @@ button.copied {
   text-align: center;
   max-width: 160px;
 }
-
-.page-footer {
-  margin-top: 2.5rem;
-  color: var(--text-dim);
-  font-size: 0.8rem;
-  text-align: center;
-}
-
-.page-footer a {
-  color: var(--accent);
-}

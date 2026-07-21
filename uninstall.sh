@@ -1,5 +1,5 @@
 #!/bin/bash
-# uninstall.sh — remove the TAK Restreamer QR Codes module from an infra-TAK
+# uninstall.sh — remove the TAK Video Stream QR Codes module from an infra-TAK
 # console.
 #
 # Reverses exactly what install.sh applied:
@@ -49,16 +49,23 @@ path = sys.argv[1]
 with open(path, 'r', encoding='utf-8') as f:
     src = f.read()
 
-# 1. Route registration
-REG_BLOCK = (
-    "try:\n"
-    "    import restreamer_qr as _restreamer_qr_module\n"
-    "    _restreamer_qr_module.register_routes(app, login_required, load_settings, save_settings)\n"
-    "except Exception as _e:\n"
-    "    print(f'[restreamer_qr] Failed to register TAK Restreamer QR Codes module: {_e}', flush=True)\n\n"
-)
-if REG_BLOCK in src:
-    src = src.replace(REG_BLOCK, '', 1)
+# 1. Route registration (either display-name wording)
+def _reg_block(display_name):
+    return (
+        "try:\n"
+        "    import restreamer_qr as _restreamer_qr_module\n"
+        "    _restreamer_qr_module.register_routes(app, login_required, load_settings, save_settings)\n"
+        "except Exception as _e:\n"
+        "    print(f'[restreamer_qr] Failed to register " + display_name + " module: {_e}', flush=True)\n\n"
+    )
+removed = False
+for name in ('TAK Video Stream QR Codes', 'TAK Restreamer QR Codes'):
+    block = _reg_block(name)
+    if block in src:
+        src = src.replace(block, '', 1)
+        removed = True
+        break
+if removed:
     print("    - removed module registration")
 else:
     print("    = module registration not present, nothing to remove")
@@ -70,44 +77,57 @@ if "\n    'qr': 'qr'," in src:
 else:
     print("    = SERVICE_DOMAIN_DEFAULTS has no 'qr' entry, nothing to remove")
 
-# 3. detect_modules() entry
-DETECT_BLOCK = (
-    "    # TAK Restreamer QR Codes — public, static QR generator page; always\n"
-    "    # available once installed since it's just files bundled into the console,\n"
-    "    # no separate process to health-check.\n"
-    "    qr_installed = os.path.exists(os.path.join(BASE_DIR, 'modules', 'restreamer_qr', 'index.html'))\n"
-    "    modules['restreamer_qr'] = {'name': 'TAK Restreamer QR Codes', 'installed': qr_installed, 'running': qr_installed,\n"
-    "        'description': 'Public QR code generator for RTMP/RTSP/SRT stream URLs', 'icon': '\U0001F4F1', 'route': '/qr', 'priority': 13}\n"
-)
-if DETECT_BLOCK in src:
-    src = src.replace(DETECT_BLOCK, '', 1)
+# 3. detect_modules() entry (either display-name wording)
+def _detect_block(display_name):
+    return (
+        "    # " + display_name + " — public, static QR generator page; always\n"
+        "    # available once installed since it's just files bundled into the console,\n"
+        "    # no separate process to health-check.\n"
+        "    qr_installed = os.path.exists(os.path.join(BASE_DIR, 'modules', 'restreamer_qr', 'index.html'))\n"
+        "    modules['restreamer_qr'] = {'name': '" + display_name + "', 'installed': qr_installed, 'running': qr_installed,\n"
+        "        'description': 'Public QR code generator for RTMP/RTSP/SRT stream URLs', 'icon': '\U0001F4F1', 'route': '/qr', 'priority': 13}\n"
+    )
+removed = False
+for name in ('TAK Video Stream QR Codes', 'TAK Restreamer QR Codes'):
+    block = _detect_block(name)
+    if block in src:
+        src = src.replace(block, '', 1)
+        removed = True
+        break
+if removed:
     print("    - removed restreamer_qr entry from detect_modules()")
 else:
     print("    = detect_modules() has no restreamer_qr entry, nothing to remove")
 
-# 4. generate_caddyfile() site-block code (current shape)
-CADDY_QR_BLOCK = (
-    "    qr_svc = modules.get('restreamer_qr', {})\n"
-    "    if qr_svc.get('installed'):\n"
-    "        qr_host = sd['qr']\n"
-    "        lines.append(f\"# TAK Restreamer QR Codes — public stream QR generator\")\n"
-    "        lines.append(f\"{qr_host} {{\")\n"
-    "        lines.append(f\"    route {{\")\n"
-    "        lines.append(f\"        rewrite * /qr{{uri}}\")\n"
-    "        lines.append(f\"        reverse_proxy 127.0.0.1:5001 {{\")\n"
-    "        lines.append(f\"            transport http {{\")\n"
-    "        lines.append(f\"                tls\")\n"
-    "        lines.append(f\"                tls_insecure_skip_verify\")\n"
-    "        lines.append(f\"                read_timeout 1h\")\n"
-    "        lines.append(f\"                write_timeout 1h\")\n"
-    "        lines.append(f\"            }}\")\n"
-    "        lines.append(f\"        }}\")\n"
-    "        lines.append(f\"    }}\")\n"
-    "        lines.append(f\"}}\")\n"
-    "        lines.append(\"\")\n"
-    "        _emit_alias_redirect(_get_service_alias(settings, 'qr'), qr_host)\n"
-    "\n"
-)
+# 4. generate_caddyfile() site-block code (current shape, either display-name
+# wording in the Caddy comment)
+def _caddy_qr_block(comment):
+    return (
+        "    qr_svc = modules.get('restreamer_qr', {})\n"
+        "    if qr_svc.get('installed'):\n"
+        "        qr_host = sd['qr']\n"
+        "        lines.append(f\"# " + comment + "\")\n"
+        "        lines.append(f\"{qr_host} {{\")\n"
+        "        lines.append(f\"    route {{\")\n"
+        "        lines.append(f\"        rewrite * /qr{{uri}}\")\n"
+        "        lines.append(f\"        reverse_proxy 127.0.0.1:5001 {{\")\n"
+        "        lines.append(f\"            transport http {{\")\n"
+        "        lines.append(f\"                tls\")\n"
+        "        lines.append(f\"                tls_insecure_skip_verify\")\n"
+        "        lines.append(f\"                read_timeout 1h\")\n"
+        "        lines.append(f\"                write_timeout 1h\")\n"
+        "        lines.append(f\"            }}\")\n"
+        "        lines.append(f\"        }}\")\n"
+        "        lines.append(f\"    }}\")\n"
+        "        lines.append(f\"}}\")\n"
+        "        lines.append(\"\")\n"
+        "        _emit_alias_redirect(_get_service_alias(settings, 'qr'), qr_host)\n"
+        "\n"
+    )
+CADDY_QR_BLOCKS = [
+    _caddy_qr_block("TAK Video Stream QR Codes — public stream QR generator"),
+    _caddy_qr_block("TAK Restreamer QR Codes — public stream QR generator"),
+]
 # Earlier (pre-migration) shape: /qr bolted onto MediaMTX's own site block.
 OLD_CADDY_MARKER = '# TAK Restreamer QR Codes — public /qr route'
 OLD_CADDY_BLOCKS = [
@@ -132,9 +152,11 @@ OLD_CADDY_BLOCKS = [
     ),
 ]
 removed = False
-if CADDY_QR_BLOCK in src:
-    src = src.replace(CADDY_QR_BLOCK, '', 1)
-    removed = True
+for block in CADDY_QR_BLOCKS:
+    if block in src:
+        src = src.replace(block, '', 1)
+        removed = True
+        break
 for old in OLD_CADDY_BLOCKS:
     if old in src:
         src = src.replace(old, '', 1)
@@ -187,9 +209,11 @@ with open(path, 'r', encoding='utf-8') as f:
 changed = False
 
 # Current shape: standalone "qr.<fqdn> { ... }" site, found by marker
-# comment regardless of which host it names.
+# comment regardless of which host it names. The alternation also covers
+# either display-name wording (the module was renamed from "Restreamer" to
+# "Video Stream").
 HOST_BLOCK_RE = re.compile(
-    re.escape('# TAK Restreamer QR Codes — public stream QR generator\n') +
+    r'# TAK (?:Restreamer|Video Stream) QR Codes — public stream QR generator\n' +
     r'[^\n]+\{.*?\n\}\n\n?',
     re.DOTALL,
 )
@@ -257,4 +281,4 @@ else
 fi
 
 echo ""
-echo "✓ TAK Restreamer QR Codes module uninstalled."
+echo "✓ TAK Video Stream QR Codes module uninstalled."

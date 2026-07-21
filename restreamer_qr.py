@@ -1,4 +1,4 @@
-"""InfraTAK module: TAK Restreamer QR Codes.
+"""InfraTAK module: TAK Video Stream QR Codes.
 
 Registers a public (unauthenticated) /qr page into a running infra-TAK
 console — the protocol/address/port/path form and QR generator from
